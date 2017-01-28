@@ -3,7 +3,7 @@ from setuptools import setup
 
 setup(
         name='adwrapper',
-        version='0.0.2',
+        version='0.0.3',
         packages=find_packages(exclude=['tests', 'test.*']),
         url='https://github.com/incognitjoe/adwrapper',
         author='Joe Butler',
@@ -11,7 +11,5 @@ setup(
         description='Simple wrapper for common Active Directory actions.',
         install_requires=[
             'python-ldap',
-            'fakeldap',
-            'mock',
         ]
 )
