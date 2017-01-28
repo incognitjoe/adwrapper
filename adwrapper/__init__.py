@@ -5,6 +5,8 @@ import ldap
 
 
 class ADWrapper(object):
+    con = None
+
     def __init__(self, uri, who, cred):
         """
         Initialize LDAP connection to target Active Directory instance
@@ -12,9 +14,18 @@ class ADWrapper(object):
         :param who: distinguishedName of user to bind as, e.g. 'cn=administrator,dc=example,dc=com'
         :param cred: password for the given user account
         """
+        self.bind(uri=uri, who=who, cred=cred)
+        self._set_logging()
+
+    def bind(self, uri, who, cred):
+        """
+        Bind to target URI with given credentials
+        :param uri: LDAP URI to connect to, e.g. 'ldap://localhost'
+        :param who: distinguishedName of user to bind as, e.g. 'cn=administrator,dc=example,dc=com'
+        :param cred: password for the given user account:param cred: 
+        """
         self.con = ldap.initialize(uri=uri)
         self.con.simple_bind_s(who=who, cred=cred)
-        self._set_logging()
 
     def _set_logging(self):
         logger = logging.getLogger('ADWrapper')
@@ -26,23 +37,21 @@ class ADWrapper(object):
             logger.addHandler(handler)
         self.logger = logger
 
-    def _search_subtree_for_single_result(self, base, filterstr, attrlist=None):
-        results = self._search_subtree_for_multiple_results(base=base, filterstr=filterstr, attrlist=attrlist)
-        if not results:
-            return None
-        return results[0]
-
-    def _search_subtree_for_multiple_results(self, base, filterstr, attrlist=None):
+    def _search_subtree_for_multiple_results(self, base, filterstr='(objectClass=*)', attrlist=None):
         return self.con.search_s(base=base, scope=ldap.SCOPE_SUBTREE, filterstr=filterstr, attrlist=attrlist)
 
-    def _search_one_level_for_multiple_results(self, base, attrlist=None):
-        return self.con.search_s(base=base, scope=ldap.SCOPE_ONELEVEL, attrlist=attrlist)
+    def _search_subordinates_for_multiple_results(self, base, filterstr='(objectClass=*)', attrlist=None):
+        return self.con.search_s(base=base, scope=ldap.SCOPE_ONELEVEL, filterstr=filterstr, attrlist=attrlist)
 
     def _search_base(self, base, attrlist=None):
         result = self.con.search_s(base=base, scope=ldap.SCOPE_BASE, attrlist=attrlist)
-        if not result:
-            return result
-        return result[0]
+        return self._get_first_result(result)
+
+    @staticmethod
+    def _get_first_result(results):
+        if not results:
+            return None
+        return results[0]
 
     @staticmethod
     def _get_add_dn_to_member_command(dn):
@@ -60,8 +69,8 @@ class ADWrapper(object):
         :param attrlist: list of desired attributes, e.g. ['sAMAccountName', 'mail', 'memberOf']. None returns all.
         :return: Tuple of (distinguishedName, user attributes) or None
         """
-        filterstr = '(&(sAMAccountName={sam})(objectClass=person))'.format(sam=sam)
-        return self._search_subtree_for_single_result(base=base, filterstr=filterstr, attrlist=attrlist)
+        filterstr = '(sAMAccountName={sam})'.format(sam=sam)
+        return self.search_subtree(base=base, filterstr=filterstr, attrlist=attrlist, first=True)
 
     def get_user_by_common_name(self, base, cn, attrlist=None):
         """
@@ -71,8 +80,8 @@ class ADWrapper(object):
         :param attrlist: list of desired attributes, e.g. ['sAMAccountName', 'mail', 'memberOf']. None returns all.
         :return: Tuple of (distinguishedName, user attributes) or None
         """
-        filterstr = '(&(cn={cn}))'.format(cn=cn)
-        return self._search_subtree_for_single_result(base=base, filterstr=filterstr, attrlist=attrlist)
+        filterstr = '(cn={cn})'.format(cn=cn)
+        return self.search_subtree(base=base, filterstr=filterstr, attrlist=attrlist, first=True)
 
     def get_attributes_for_distinguished_name(self, dn, attrlist=None):
         """
@@ -89,7 +98,7 @@ class ADWrapper(object):
         :param group: group DN, e.g. 'ou=mygroup,dc=example,dc=com'
         :return: List of distinguishedNames of members
         """
-        result = self._search_base(base=group, attrlist=['member'])
+        result = self.get_attributes_for_distinguished_name(group, attrlist=['member'])
         if not result:
             return result
         return result[1].get('member')
@@ -185,23 +194,51 @@ class ADWrapper(object):
         :param mustchangepass: Force user to change password on next logon
         :return: True on success, False on failure
         """
+        userobjlist = ['organizationalPerson', 'person', 'top', 'user']
         if mustchangepass:
             pwdset = '0'
         else:
             pwdset = '-1'
-        attrs = dict()
-        attrs['sAMAccountName'] = sam
-        attrs['userPrincipalName'] = principalname
-        attrs['givenName'] = firstname
-        attrs['sn'] = surname
-        attrs['displayName'] = '{} {}'.format(firstname, surname)
-        attrs['objectClass'] = ['organizationalPerson', 'person', 'top', 'user']
-        attrs['mail'] = email
-        attrs['pwdLastSet'] = pwdset
-        attrs['unicodePwd'] = self._encode_ad_password(password)
+        displayname = '{} {}'.format(firstname, surname)
+        attrs = self._build_user_attrib_dict(sAMAccountName=sam, userPrincipalName=principalname,
+                                             displayName=displayname, givenName=firstname, sn=surname,
+                                             objectClass=userobjlist, mail=email, pwdLastSet=pwdset,
+                                             unicodePwd=self._encode_ad_password(password))
         try:
             self.create_new_entry(dn, attrs)
             return True
         except ldap.ALREADY_EXISTS as err:
             self.logger.warning('{} could not be created: {}'.format(dn, repr(err)))
             return False
+
+    @staticmethod
+    def _build_user_attrib_dict(**kwargs):
+        return kwargs
+
+    def search_subordinates(self, base, filterstr='(objectClass=*)', attrlist=None, first=False):
+        """
+        Search a DN's direct subordinates.
+        :param base: distinguishedName to search
+        :param filterstr: LDAP filter string
+        :param attrlist: list of desired attributes, e.g. ['sAMAccountName', 'mail', 'memberOf']. None returns all.
+        :param first: if True, return only first result
+        :return: list of result tuples, or result tuple if first is True
+        """
+        results = self._search_subordinates_for_multiple_results(base=base, filterstr=filterstr, attrlist=attrlist)
+        if first:
+            return self._get_first_result(results)
+        return results
+
+    def search_subtree(self, base, filterstr='(objectClass=*)', attrlist=None, first=False):
+        """
+        Search DN's entire subtree.
+        :param base: distinguishedName to search
+        :param filterstr: LDAP filter string
+        :param attrlist: list of desired attributes, e.g. ['sAMAccountName', 'mail', 'memberOf']. None returns all.
+        :param first: if True, return only first result
+        :return: list of result tuples, or result tuple if first is True
+        """
+        results = self._search_subtree_for_multiple_results(base=base, filterstr=filterstr, attrlist=attrlist)
+        if first:
+            return self._get_first_result(results)
+        return results
