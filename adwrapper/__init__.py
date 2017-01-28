@@ -126,3 +126,82 @@ class ADWrapper(object):
         except ldap.UNWILLING_TO_PERFORM as err:
             print(err)
             return False
+
+    def create_new_entry(self, dn, attrs):
+        """
+        Create a new LDAP object with the distinguishedName and attributes provided
+        :param dn: full DN of target object, e.g. 'cn=new user,ou=users,dc=example,dc=com'
+        :param attrs: attributes as dict, e.g. {'cn': 'new user', 'mail': 'new@example.com'}
+        :return: True on success
+        """
+        self.con.add_s(dn, attrs.items())
+        return True
+
+    @staticmethod
+    def _encode_ad_password(password):
+        return unicode('\"{}\"'.format(password), 'iso-8859-1').encode('utf-16-le')
+
+    def enable_account(self, dn):
+        """
+        Enable a user account.
+        :param dn: distinguishedName of user
+        :return: True on success, False on failure
+        """
+        try:
+            enablecmd = [(ldap.MOD_REPLACE, 'userAccountControl', '512')]
+            self.con.modify_s(dn, enablecmd)
+            self.logger.info('Enabled {}.'.format(dn))
+            return True
+        except ldap.UNWILLING_TO_PERFORM as err:
+            self.logger.warning('Enabling {} failed: {}'.format(dn, repr(err)))
+            self.logger.warning('Account password may not meet domain policy set.')
+            return False
+
+    def disable_account(self, dn):
+        """
+        Disable user account.
+        :param dn: distinguishedName of user
+        :return: True on success, False on failure
+        """
+        try:
+            disablecmd = [(ldap.MOD_REPLACE, 'userAccountControl', '514')]
+            self.con.modify_s(dn, disablecmd)
+            self.logger.info('Disabled {}.'.format(dn))
+            return True
+        except ldap.UNWILLING_TO_PERFORM as err:
+            self.logger.warning('Disabling {} failed: {}'.format(dn, repr(err)))
+            return False
+
+    def create_new_user(self, dn, sam, principalname, firstname, surname, email,
+                        password='CHANGEME1!', mustchangepass=False):
+        """
+        Create a new user account.
+        :param dn: distinguishedName of new user, e.g. 'cn=new user,ou=users,dc=example,dc=com'
+        :param sam: sAMAccountName
+        :param principalname: userPrincipalName, aka User Logon Name
+        :param firstname: User's firstname
+        :param surname: User's surname
+        :param password: password to set
+        :param mustchangepass: Force user to change password on next logon
+        :return: True on success, False on failure
+        """
+        if mustchangepass:
+            pwdset = '0'
+        else:
+            pwdset = '-1'
+        attrs = dict()
+        attrs['sAMAccountName'] = sam
+        attrs['userPrincipalName'] = principalname
+        attrs['givenName'] = firstname
+        attrs['sn'] = surname
+        attrs['displayName'] = '{} {}'.format(firstname, surname)
+        attrs['objectClass'] = ['organizationalPerson', 'person', 'top', 'user']
+        attrs['mail'] = email
+        attrs['pwdLastSet'] = pwdset
+        attrs['unicodePwd'] = self._encode_ad_password(password)
+        try:
+            self.create_new_entry(dn, attrs)
+            return True
+        except ldap.ALREADY_EXISTS as err:
+            self.logger.warning('{} could not be created: {}'.format(dn, repr(err)))
+            return False

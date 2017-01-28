@@ -1,7 +1,6 @@
 import unittest
 
 import fakeldap
-import ldap
 from mock import patch
 
 from adwrapper import ADWrapper
@@ -20,19 +19,29 @@ class TestADWrapper(unittest.TestCase):
             "member": ["cn=joe butler,ou=users,dc=test,dc=com"]
         }
     }
-    _mock_ldap = fakeldap.MockLDAP(tree)
-    fakeldap.ldap = ldap
 
-    @classmethod
-    def setUpClass(cls):
-        cls.ldap_patcher = patch('adwrapper.ldap.initialize')
-        cls.mock_ldap = cls.ldap_patcher.start()
-        cls.mock_ldap.return_value = cls._mock_ldap
-        cls.ad = ADWrapper(uri='ldap://localhost', who='', cred='')
+    def setUp(self):
+        self.ldap_patcher = patch('adwrapper.ldap.initialize')
+        self.mock_ldap_object = fakeldap.MockLDAP(self.tree)
+        self.mock_ldap = self.ldap_patcher.start()
+        self.mock_ldap.return_value = self.mock_ldap_object
+        self.ad = ADWrapper(uri='ldap://localhost', who='', cred='')
 
     def test_get_members_of_group(self):
         result = self.ad.get_members_of_group(group='ou=test,dc=test,dc=com')
         assert result == ['cn=joe butler,ou=users,dc=test,dc=com'], result
+
+    def test_create_new_entry(self):
+        testdn = 'cn=new group,ou=groups,dc=test,dc=com'
+        attrs = {'ou': 'new group'}
+        self.ad.create_new_entry(dn=testdn, attrs=attrs)
+        calls = self.mock_ldap_object.ldap_methods_called_with_arguments()
+        self.assertTupleEqual(('add_s', {'dn': testdn, 'record': attrs.items()}), calls[1])
+
+    def test_add_new_user(self):
+        create = self.ad.create_new_user(dn='cn=new user,ou=users,dc=test,dc=com', sam='newuser', firstname='New',
+                                         surname='User', email='newuser@example.com', principalname='newuser@test.com')
+        assert create is True, 'Account creation failed.'
 
     # FIXME: fakeldap doesn't work with these methods but a live AD server does.
     # Should probably write my own fixture that can deal with scopes and modify_s correctly.
@@ -50,8 +59,8 @@ class TestADWrapper(unittest.TestCase):
     # def test_get_user_by_samaccountname(self):
     #     result = self.ad.get_user_by_samaccountname(base='ou=users,dc=test,dc=com',
     #                                       sam='incognitjoe', attrlist=['cn'])
-    #     assert result == ('cn=joe butler,ou=users,dc=test=dc=com', {'cn': ['joe butler']}), result
+    #     assert result == ('cn=joe butler,ou=users,dc=test,dc=com', {'cn': ['joe butler']}), result
 
     def tearDown(self):
-        self._mock_ldap.reset()
+        self.mock_ldap_object.reset()
         self.mock_ldap.stop()
