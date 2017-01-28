@@ -116,7 +116,7 @@ class ADWrapper(object):
             self.logger.info('Added {} to {}.'.format(memberdn, groupdn))
             return True
         except ldap.ALREADY_EXISTS as err:
-            print(err)
+            self.logger.info(err)
             return False
 
     def remove_member_from_group(self, memberdn, groupdn):
@@ -133,7 +133,7 @@ class ADWrapper(object):
             self.logger.info('Removed {} from {}.'.format(memberdn, groupdn))
             return True
         except ldap.UNWILLING_TO_PERFORM as err:
-            print(err)
+            self.logger.info(err)
             return False
 
     def create_new_entry(self, dn, attrs):
