@@ -7,13 +7,17 @@ import ldap
 class ADWrapper(object):
     con = None
 
-    def __init__(self, uri, who, cred):
+    def __init__(self, uri, who, cred, strictssl=True):
         """
         Initialize LDAP connection to target Active Directory instance
         :param uri: LDAP URI to connect to, e.g. 'ldap://localhost'
         :param who: distinguishedName of user to bind as, e.g. 'cn=administrator,dc=example,dc=com'
         :param cred: password for the given user account
+        :param strictssl: True by default. If False, disable certification verification over LDAPS. Do not
+                            use this unless you're sure you understand the risks.
         """
+        if not strictssl:
+            ldap.set_option(ldap.OPT_X_TLS_REQUIRE_CERT, ldap.OPT_X_TLS_ALLOW)
         self.bind(uri=uri, who=who, cred=cred)
         self._set_logging()
 
@@ -205,6 +209,7 @@ class ADWrapper(object):
                                              objectClass=userobjlist, mail=email, pwdLastSet=pwdset,
                                              unicodePwd=self._encode_ad_password(password))
         try:
+            self.logger.info('Creating {} with attributes {}'.format(dn, attrs))
             self.create_new_entry(dn, attrs)
             return True
         except ldap.ALREADY_EXISTS as err:
